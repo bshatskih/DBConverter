@@ -5,7 +5,7 @@
 
 # utils
 
-## utils::File_validator
+## utils::file_validator
 
 ### Назначение
 
