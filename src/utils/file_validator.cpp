@@ -169,7 +169,7 @@ namespace utils {
     file_type file_validator::detect_type(const std::filesystem::path& path) {
         std::string file_extension = path.extension().string();
         for (char& c : file_extension) {
-            c = std::tolower(c);
+            c = std::tolower(static_cast<unsigned char>(c));
         }
 
         if (file_extension == ".csv")  
