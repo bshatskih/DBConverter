@@ -15,7 +15,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 include(cmake/FetchSQLite.cmake)
 
 # Добавляем исполняемый файл
-add_executable(${PROJECT_NAME} src/main.cpp)
+add_executable(${PROJECT_NAME} src/main.cpp src/utils/file_validator.cpp
+                                            src/utils/string_utils.cpp)
 
 # Линковка с SQLite
 target_link_libraries(${PROJECT_NAME}
