@@ -58,7 +58,7 @@ namespace models {
         /// Имя таблицы
         [[nodiscard]] const std::string& name() const;
 
-        /// Список колонок (без PK и FK — они хранятся отдельно)
+        /// Список колонок (без PK и FK - они хранятся отдельно)
         [[nodiscard]] const std::vector<Column>& columns() const;
 
         /// Имя PK колонки
