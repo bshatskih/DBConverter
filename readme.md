@@ -1,6 +1,352 @@
 
 
 
+# models
+
+
+## models::table_schema
+
+Класс описывает структуру таблицы SQLite, построенную по данным из CSV или JSON.
+Формируется парсером - один раз на файл для CSV, рекурсивно для каждого вложенного объекта в JSON. Не хранит сами данные, только схему. Типы колонок задаются через `TypeConverter`, который анализирует данные и определяет `Sqlite_type` для каждой колонки.
+
+
+---
+   
+### Расположение
+
+```
+src/
+└── models/
+    ├── table_schema.h
+    └── table_schema.cpp
+```
+
+---
+
+### Сопутствующие типы
+
+- **`Sqlite_type`** -  -одмножество SQLite affinity типов достаточное для конвертации CSV/JSON. `BLOB` и `NUMERIC` не используются - бинарных данных в CSV/JSON не бывает, а `NUMERIC` это специфический SQLite affinity без практической пользы для .
+   ```cpp
+   enum class Sqlite_type {
+      INTEGER,
+      REAL,
+      TEXT
+   };
+   ```
+
+   | Тип | Когда используется |
+   |-----|--------------------|
+   | `INTEGER` | целые числа, булевы значения (`true/false` -> `1/0`) |
+   | `REAL` | вещественные числа |
+   | `TEXT` | строки, массивы примитивов сериализованные через запятую |
+
+
+- **`Column`** - простая структура: пара имя + тип. Логики не содержит. Имя хранится в нормализованном виде после `string_utils::to_sql_identifier`.
+
+   ```cpp
+   struct Column {
+      std::string name;
+      Sqlite_type type;
+   };
+   ```
+
+   Пример использования:
+   ```cpp
+   Column col;
+   col.name = "first_name";
+   col.type = Sqlite_type::TEXT;
+   ```
+
+---
+
+### Конструкторы
+
+- **`Корневая таблица`**
+   ```cpp
+   table_schema(std::string name,
+               std::vector columns,
+               std::string pk_column = "id",
+               bool has_custom_pk = false);
+   ```
+   Используется для CSV и верхнего уровня JSON.
+
+   ```cpp
+   // CSV: заголовки ["name", "age", "score"]
+   table_schema schema(
+      "users",
+      {{"name", Sqlite_type::TEXT}, {"age", Sqlite_type::INTEGER}, {"score", Sqlite_type::REAL}},
+      "id",
+      false  // PK сгенерирован — AUTOINCREMENT
+   );
+   ```
+
+   ```cpp
+   // JSON: в данных есть поле "id"
+   table_schema schema(
+      "users",
+      {{"name", Sqlite_type::TEXT}, {"age", Sqlite_type::INTEGER}},
+      "id",
+      true  // PK взят из данных
+   );
+   ```
+
+---
+
+- **`Дочерняя таблица`** - используется для вложенных объектов и массивов объектов в JSON.
+   ```cpp
+   table_schema(std::string name,
+               std::vector columns,
+               std::string pk_column,
+               bool has_custom_pk,
+               std::string parent_table,
+               std::string foreign_key);
+   ```
+
+   ```cpp
+   // JSON: {"id": 1, "orders": [{"id": 1, "amount": 99.9}]}
+   table_schema orders_schema(
+      "orders",
+      {{"amount", Sqlite_type::REAL}},
+      "id",
+      true,
+      "users",    // родительская таблица
+      "users_id"  // FK колонка в таблице orders
+   );
+   ```
+
+---
+
+
+### Основные свойства
+
+- **`name`** - возвращает имя таблицы в нормализованном виде.
+   ```cpp
+   [[nodiscard]] const std::string& name() const;
+   ```
+
+- **`columns`** - возвращает список колонок таблицы. Не включает PK и FK — они хранятся отдельно и обрабатываются `db_manager` особым образом при генерации DDL.
+   ```cpp
+   [[nodiscard]] const std::vector& columns() const;
+   ```
+   Список колонок таблицы. Не включает PK и FK — они хранятся отдельно и обрабатываются `db_manager` особым образом при генерации DDL.
+
+- **`pk_column`** - возвращает имя PK колонки. По умолчанию `"id"`.
+   ```cpp
+   [[nodiscard]] const std::string& pk_column() const;
+   ```
+
+- **`has_custom_pk`** - возвращает `true`, если PK взят из данных, и `false`, если сгенерирован (`AUTOINCREMENT`).
+   ```cpp
+   [[nodiscard]] bool has_custom_pk() const;
+   ```
+
+   Влияет на то как `db_manager` генерирует DDL:
+
+   ```sql
+   -- has_custom_pk = false
+   id INTEGER PRIMARY KEY AUTOINCREMENT
+
+   -- has_custom_pk = true
+   id INTEGER PRIMARY KEY
+   ```
+
+---
+
+### Связи
+
+- **`is_child`** - возвращает `true`, если таблица является дочерней — имеет родителя. Используется в `db_manager` чтобы понять нужно ли добавлять FK колонку при генерации DDL.
+   ```cpp
+   [[nodiscard]] bool is_child() const;
+   ```
+   ```cpp
+   if (schema.is_child()) {
+      // добавить FK колонку в CREATE TABLE
+   }
+   ```
+
+
+
+- **`parent_table`** - возвращает имя родительской таблицы. Пустая строка если таблица корневая.
+   ```cpp
+   [[nodiscard]] const std::string& parent_table() const;
+   ```
+
+
+- **`foreign_key`** - возвращает имя FK колонки в этой таблице. Пустая строка если таблица корневая. Формируется как `{parent_table_name}_id`.
+   ```cpp
+   [[nodiscard]] const std::string& foreign_key() const;
+   ```
+
+---
+
+
+### Поиск колонок
+
+- **`find_column`** - возвращает `std::optional<Column>`. `std::nullopt` если колонка не найдена. Используется в `db_manager` при генерации DDL и при связывании данных, чтобы узнать тип колонки по имени.
+   ```cpp
+   [[nodiscard]] std::optional<Column> find_column(const std::string& name) const;
+   ```
+
+- **`has_column`** - возвращает `true`, если колонка с таким именем существует.
+   ```cpp
+   [[nodiscard]] bool has_column(const std::string& name) const;
+   ```
+
+- **`column_count`** - возвращает количество колонок. Не учитывает PK и FK.
+   ```cpp
+   [[nodiscard]] std::size_t column_count() const;
+   ```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+
+
+
+
+
+
+## models::data_row
+
+### Назначение
+
+**`data_row`** представляет одну строку данных, прочитанную из CSV или JSON, до её записи в SQLite.
+Это промежуточная структура — она живёт между парсером и `db_manager`. Парсер заполняет `data_row`, `db_manager` читает из неё и вызывает `sqlite3_bind_*`.
+
+---
+   
+### Расположение
+
+```
+src/
+└── models/
+    ├── data_row.h
+    └── data_row.cpp
+```
+
+---
+
+### Типы
+
+```cpp
+using Value   = std::optional<std::string>;
+using Storage = std::unordered_map<std::string, Value>;
+```
+
+`Value` - значение одной ячейки:
+
+| Значение | Смысл |
+|----------|-------|
+| `std::nullopt` | NULL - отсутствие данных |
+| `std::optional{"some info"}` | обычное строковое значение |
+
+Решение о том является ли значение NULL принимает парсер через `string_utils::is_null_like`.  `DataRow` просто хранит то что ей передали.
+
+`Storage` - публичный алиас для `unordered_map`. Используется когда парсер хочет передать все значения сразу через конструктор.
+
+---
+
+### Конструкторы
+
+- **`DataRow()`** - cоздаёт пустую строку без колонок.
+   ```cpp
+   DataRow() = default;
+   ```
+
+- **`DataRow(Storage)`** - принимает готовую мапу. Используется когда парсер собрал все значения заранее и хочет передать их одним движением без последовательных вызовов `set`.
+   ```cpp
+   explicit DataRow(Storage data);
+   ```
+
+---
+
+### Запись
+
+- **`set`** - устанавливает значение колонки.
+   ```cpp
+   void set(const std::string& column, Value value);
+   ```
+
+- **`set_null`** - по сути семантический сахар для `set(column, std::nullopt)`.=
+   ```cpp
+   void set_null(const std::string& column);
+   ```
+
+---
+
+### Чтение
+
+- **`get`** - возвращает значение колонки. Если колонка отсутствует - возвращает `std::nullopt`. Не бросает исключений.
+   ```cpp
+   [[nodiscard]] Value get(const std::string& column) const;
+   ```
+   В `db_manager` мы итерируемся по колонкам из `TableSchema` и для каждой запрашиваем значение из `DataRow`. Если парсер по какой-то причине не заполнил колонку - это не фатальная ошибка, это NULL.
+   Если бы `get` бросал исключение, пришлось бы оборачивать каждый вызов в try/catch.
+
+- **`has`** - `true` если колонка присутствует в строке - даже если её значение `std::nullopt`. Позволяет различить две принципиально разные ситуации: "колонка не пришла из парсера" и "колонка пришла с NULL".
+   ```cpp
+   [[nodiscard]] bool has(const std::string& column) const;
+   ```
+
+- **`is_null`** - `true` если значение колонки равно NULL. Возвращает `true` и для отсутствующей колонки - отсутствие колонки трактуется как NULL. По сути синтаксический сахар над `!row.get(column).has_value()`.
+   C точки зрения базы данных нет разницы между "колонка пришла с NULL" и "колонка вообще не пришла" — в обоих случаях в SQLite запишется NULL.
+   ```cpp
+   [[nodiscard]] bool is_null(const std::string& column) const;
+   ```
+   Используется в `db_manager`:
+   ```cpp
+   if (row.is_null(column)) {
+      sqlite3_bind_null(stmt, i);
+   }
+   ```
+- **`size`** - количество колонок в строке. Используется для валидации — убедиться что парсер заполнил столько колонок сколько есть в схеме.
+   ```cpp
+   [[nodiscard]] std::size_t size() const;
+   ```
+
+- **`empty`** - `true` если строка не содержит ни одной колонки.
+   ```cpp
+   [[nodiscard]] bool empty() const;
+   ```
+
+
+---
+
+### Итерация
+
+```cpp
+[[nodiscard]] Storage::const_iterator begin() const;
+[[nodiscard]] Storage::const_iterator end() const;
+```
+Позволяет итерироваться по всем колонкам строки
+
+---
+
+### Взаимодействие с другими классами
+
+**Парсер** создаёт `data_row` и заполняет её через `set` / `set_null`. Имена колонок нормализует через `string_utils::to_sql_identifier` перед передачей в `set`.
+
+`db_manager` читает из `data_row` через `get` / `is_null` при формировании `sqlite3_bind_*` вызовов. Типы колонок берёт из `table_schema` — `data_row` о типах ничего не знает.
+
+`table_schema` и `data_row` намеренно разделены: схема описывает структуру таблицы, строка хранит конкретные данные. Это позволяет держать одну схему и много строк не дублируя информацию о типах.
+
+
+
+
+
+---
+
+
+
 
 
 # utils
@@ -9,7 +355,7 @@
 
 ### Назначение
 
-`file_validator` - утилитный класс, выполняющий предварительную проверку файла перед передачей его в парсер. Его единственная ответственность - убедиться, что файл **пригоден для чтения**: он существует, доступен, имеет ожидаемый тип и содержит текстовые данные. Класс намеренно не валидирует структуру содержимого (корректность CSV-столбцов, синтаксис JSON и т.д.) - это зона ответственности парсеров.
+**`file_validator`** - утилитный класс, выполняющий предварительную проверку файла перед передачей его в парсер. Его единственная ответственность - убедиться, что файл **пригоден для чтения**: он существует, доступен, имеет ожидаемый тип и содержит текстовые данные. Класс намеренно не валидирует структуру содержимого (корректность CSV-столбцов, синтаксис JSON и т.д.) - это зона ответственности парсеров.
 
 Цель класса - дать понятную диагностику на самом раннем этапе, до того как парсер столкнётся с неожиданным вводом.
 
@@ -106,7 +452,7 @@ explicit file_validator(uintmax_t max_file_size = DEFAULT_MAX_FILE_SIZE);
 [[nodiscard]] static bool looks_binary(const char* buf, std::size_t len);
 ```
 
-
+---
 
 ## utils::string_utils
 
@@ -337,6 +683,10 @@ src/
    ```
 
 ---
+
+
+
+
 
 
 
