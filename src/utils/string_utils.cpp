@@ -26,7 +26,7 @@ namespace utils {
 
         // Набор null-like значений (в нижнем регистре)
         const std::unordered_set<std::string_view> null_like_values = {
-            "", "null", "nil", "none", "n/a", "na"
+            "", "null", "nil", "none", "n/a", "na", "nan"
         };
 
         // true/false лексемы
