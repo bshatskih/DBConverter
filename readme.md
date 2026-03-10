@@ -1,8 +1,23 @@
 
+# DBConverter
+
+## Содержание
+
+1. [models](#models)
+   - [table_schema](#modelstable_schema)
+   - [data_row](#modelsdata_row)
+2. [utils](#utils)
+   - [type_converter](#utilstype_converter)
+   - [file_validator](#utilsfile_validator)
+   - [string_utils](#utilsstring_utils)
+3. [parsers](#parsers)
+   - [csv_parser](#parserscsv_parser)
+   - [json_parser](#parsersjson_parser)
+4. [database](#database)
+   - [db_manager](#databasedb_manager)
 
 
 # models
-
 
 ## models::table_schema
 
@@ -350,6 +365,211 @@ using Storage = std::unordered_map<std::string, Value>;
 
 
 # utils
+
+## utils::type_converter
+
+### Назначение
+
+**`type_converter`** - stateless-класс (все методы статические, конструктор удалён), отвечающий за три задачи:
+- **Определение типа** строковых значений из CSV/JSON файлов
+- **Конвертацию** строк в типизированные значения (`sql_value`), готовые к передаче в `sqlite3_bind_*`
+- **Сериализацию** значений в SQL-литералы для DDL
+
+---
+   
+### Расположение
+
+```
+src/
+└── utils/
+    ├── type_converter.h
+    └── type_converter.cpp
+```
+
+---
+
+
+### Типы данных
+
+-  **`sql_type`**
+
+```cpp
+enum class sql_type : uint8_t {
+   Null,
+   Integer,
+   Real,
+   Boolean,
+   Text
+};
+```
+
+Перечисление отражает поддерживаемые типы колонок SQLite с точки зрения **стратегии конвертации**, а не DDL. Порядок членов соответствует приоритету автодетекции (от наиболее специфичного к наименее):
+
+| Значение  | DDL-тип в SQLite | Описание                                              |
+|-----------|-----------------|-------------------------------------------------------|
+| `Null`    | `TEXT`          | Все значения в колонке — null-like; дефолт — TEXT     |
+| `Integer` | `INTEGER`       | Целые числа: `"42"`, `"-7"`, `"+100"`                 |
+| `Real`    | `REAL`          | Вещественные: `"3.14"`, `"-0.5"`, `"1e10"`, `".5"`   |
+| `Boolean` | `INTEGER`       | Булевы значения: `"true/false"`, `"yes/no"`, `"1/0"`, `"on/off"` |
+| `Text`    | `TEXT`          | Всё остальное, а также финальное состояние при конфликте типов |
+
+`Boolean` выделен в отдельный тип, хотя SQLite хранит его как `INTEGER` поскольку `sql_type` управляет стратегией конвертации, а не только DDL. Без отдельного `Boolean` строка `"yes"` в INTEGER-колонке упала бы в fallback на `Text`, а не сконвертировалась в `int64_t(1)`.
+
+
+- **`sql_value`**
+
+```cpp
+using sql_value = std::variant<std::nullptr_t, int64_t, double, bool, std::string>;
+
+```
+
+Типизированное значение, готовое к передаче в `sqlite3_bind_*`. Порядок альтернатив в `variant` намеренно совпадает с порядком членов `sql_type`:
+
+| Альтернатива    | Соответствует  | `sqlite3_bind_*`          |
+|-----------------|----------------|---------------------------|
+| `nullptr_t`     | `Null`         | `sqlite3_bind_null`       |
+| `int64_t`       | `Integer`      | `sqlite3_bind_int64`      |
+| `double`        | `Real`         | `sqlite3_bind_double`     |
+| `bool`          | `Boolean`      | `sqlite3_bind_int` (0/1)  |
+| `std::string`   | `Text`         | `sqlite3_bind_text`       |
+
+
+---
+
+
+### Интерфейс
+
+1. **`infer_type`** - определяет наиболее специфичный `sql_type` для одного строкового значения.
+
+   ```cpp
+   [[nodiscard]] static sql_type infer_type(std::string_view s);
+   ```
+
+   Порядок проверок (первое совпадение побеждает):
+   ```
+   1. is_null_like(s)         -->    sql_type::Null
+   2. is_integer(trim(s))     -->    sql_type::Integer
+   3. is_real(trim(s))        -->    sql_type::Real
+   4. is_boolean(s)           -->    sql_type::Boolean
+   5. иначе                   -->    sql_type::Text
+   ```
+
+2. **`infer_column_type`** - выводит единый тип для **целой колонки** по всем её значениям.
+   ```cpp
+   [[nodiscard]] static sql_type infer_column_type(const std::vector<std::string_view>& values);
+   [[nodiscard]] static sql_type infer_column_type(const std::vector<std::string>& values);
+   ```
+
+   
+
+   Алгоритм:
+   1. Начинает с `sql_type::Null`
+   2. Для каждого не-null значения вызывает `infer_type` и повышает текущий тип через `promote`
+   3. При достижении `Text` - прерывает обход (финальное состояние)
+   4. Если все значения null-like — возвращает `Text` (безопасный дефолт для пустой колонки)
+
+   ```cpp
+   infer_column_type({"1", "2", "3"})          // -->  Integer
+   infer_column_type({"1", "2", "3.5"})        // -->  Real  (Integer --> Real)
+   infer_column_type({"1", "null", "3"})       // -->  Integer (null игнорируется)
+   infer_column_type({"null", "null"})         // -->  Text   (все null --> дефолт)
+   infer_column_type({"true", "false", "1"})   // -->  Text   (Boolean + Integer --> Text)
+   infer_column_type({"hello", "world"})       // -->  Text
+   ```
+
+3. **`promote`** - возвращает наименее специфичный тип, способный вместить оба. Вынесен в `public` для тестирования. Используется в `infer_column_type` для повышения типа колонки при обходе её значений.
+   ```cpp
+   [[nodiscard]] static sql_type promote(sql_type current, sql_type incoming);
+   ```
+
+   Таблица повышения типов:
+
+   | Текущий \ Новый | Null | Integer | Real | Boolean | Text |
+   |-----------------|------|---------|------|---------|------|
+   | Null            | Null | Integer | Real | Boolean | Text |
+   | Integer         | Integer | Integer | Real | Text    | Text |
+   | Real            | Real  | Real    | Real  | Text    | Text |
+   | Boolean         | Boolean| Text    | Text  | Boolean| Text |
+   | Text            | Text  | Text    | Text  | Text    | Text |
+
+   Ключевые правила:
+   - `Null` поглощается любым конкретным типом
+   - `Integer + Real -> Real` - расширение без потерь
+   - `Boolean + Integer/Real -> Text` - нельзя однозначно различить `"1"` как число и `"1"` как `true`
+   - `Text` - финальное состояние, из которого нет выхода
+
+
+4. **`convert`** (с подсказкой о типе) - конвертирует строку в `sql_value`, опираясь на заранее известный тип колонки.
+   ```cpp
+   [[nodiscard]] static sql_value convert(std::string_view s, sql_type col_type);
+   ```
+   Поведение:
+   - Если `s` is_null_like - всегда возвращает `nullptr_t`, независимо от `col_type`
+   - При ошибке конвертации (например, `"abc"` в `Integer`-колонке) - тихий fallback на `std::string`, исключений не бросает
+
+   ```cpp
+   convert("42",    sql_type::Integer) // --> int64_t(42)
+   convert("3.14",  sql_type::Real)    // --> double(3.14)
+   convert("yes",   sql_type::Boolean) // --> bool(true)
+   convert("null",  sql_type::Integer) // --> nullptr  (null-like игнорирует col_type)
+   convert("abc",   sql_type::Integer) // --> string("abc")  (fallback)
+   convert("  42 ", sql_type::Integer) // --> int64_t(42)  (trim применяется)
+   ```
+
+   **`convert`** (автодетекция)
+   ```cpp
+   [[nodiscard]] static sql_value convert(std::string_view s);
+   ```
+
+   Эквивалент `convert(s, infer_type(s))`.
+
+
+5. **`to_sql_literal`** - возвращает SQL-литерал для генерации DDL-скриптов.
+
+   ```cpp
+   [[nodiscard]] static std::string to_sql_literal(const sql_value& value);
+   ```
+   > Не предназначен для подстановки в prepared statements. Для передачи параметров получаем `sql_value` через `convert()` и передаём его в `sqlite3_bind_*` в `db_manager`.
+
+
+6. **`sql_type_name`** - возвращает имя типа для использования в `CREATE TABLE`
+
+   ```cpp
+   [[nodiscard]] static std::string_view sql_type_name(sql_type type);
+   ```
+
+7. **`type_of`** - возвращает `sql_type`, соответствующий хранимой альтернативе `variant`. Полезен при обходе результатов после конвертации.
+
+
+   ```cpp
+   [[nodiscard]] static sql_type type_of(const sql_value& value);
+   ```
+
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## utils::file_validator
 
