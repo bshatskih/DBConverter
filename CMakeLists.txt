@@ -16,9 +16,12 @@ include(cmake/FetchSQLite.cmake)
 
 # Добавляем исполняемый файл
 add_executable(${PROJECT_NAME} src/main.cpp src/utils/file_validator.cpp
-                                            src/utils/string_utils.cpp 
+                                            src/utils/string_utils.cpp
+                                            src/utils/type_converter.cpp 
                                             src/models/table_schema.cpp
-                                            src/models/data_row.cpp)
+                                            src/models/data_row.cpp
+                                            src/database/db_manager.cpp
+                                            src/parsers/csv_parser.cpp)
 
 # Линковка с SQLite
 target_link_libraries(${PROJECT_NAME}
