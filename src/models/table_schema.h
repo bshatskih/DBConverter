@@ -21,7 +21,7 @@ namespace models {
 
     struct Column {
         std::string name;
-        Sqlite_type  type;
+        Sqlite_type type;
     };
 
     // ========================================================================== //

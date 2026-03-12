@@ -48,13 +48,13 @@ namespace utils {
             return current;
         }
 
-        // Одинаковые типы — без изменений
+        // Одинаковые типы - без изменений
         if (current == incoming) {
             return current;
         }
         
         // Integer + Real -> Real (расширение без потерь)
-        if ((current == sql_type::Integer && incoming == sql_type::Real) || (current == sql_type::Real    && incoming == sql_type::Integer)) {
+        if ((current == sql_type::Integer && incoming == sql_type::Real) || (current == sql_type::Real && incoming == sql_type::Integer)) {
             return sql_type::Real;
         }
 
@@ -174,6 +174,7 @@ namespace utils {
                     return result;
                 }
 
+                // Не удалось - fallback to nullptr;
                 return nullptr;
             }
 
@@ -184,6 +185,7 @@ namespace utils {
                     return *maybe;
                 }
 
+                // Не удалось - fallback to nullptr;
                 return nullptr;
             }
 

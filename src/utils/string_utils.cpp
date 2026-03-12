@@ -175,7 +175,7 @@ namespace utils {
 
 
     bool string_utils::is_null_like(std::string_view str) {
-        const std::string lower = to_lower(str);
+        std::string lower = to_lower(str);
         return null_like_values.contains(lower);
     }
 
@@ -214,7 +214,7 @@ namespace utils {
 
 
     bool string_utils::is_boolean(std::string_view str) {
-        const std::string lower = to_lower(str);
+        std::string lower = to_lower(str);
         return true_values.contains(lower) || false_values.contains(lower);
     }
 
@@ -225,7 +225,7 @@ namespace utils {
     // ========================================================================== //
 
     std::optional<bool> string_utils::parse_boolean(std::string_view s) {
-        const std::string lower = to_lower(s);
+        std::string lower = to_lower(s);
         
         if (true_values.contains(lower)) {
             return std::make_optional(true);
