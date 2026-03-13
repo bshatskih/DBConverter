@@ -17,9 +17,7 @@
    - [string_utils](#utilsstring_utils)
 5. [database](#database)
    - [db_manager](#databasedb_manager)
-6. [parsers](#parsers)
-   - [csv_parser](#parserscsv_parser)
-7. [Система сборки](#система-сборки)
+6. [Система сборки](#система-сборки)
 
 
 
