@@ -3,23 +3,24 @@
 
 ## Содержание
 
-1. [models](#models)
+1. [Процесс выполнения программы](#процесс-выполнения-программы)
+   - [CSV to SQLite](#csv-to-sqlite)
+2. [parsers](#parsers)
+   - [csv_parser](#parserscsv_parser)
+   - [json_parser](#parsersjson_parser)
+3. [models](#models)
    - [table_schema](#modelstable_schema)
    - [data_row](#modelsdata_row)
-2. [utils](#utils)
+4. [utils](#utils)
    - [type_converter](#utilstype_converter)
    - [file_validator](#utilsfile_validator)
    - [string_utils](#utilsstring_utils)
-3. [parsers](#parsers)
-   - [csv_parser](#parserscsv_parser)
-   - [json_parser](#parsersjson_parser)
-4. [database](#database)
+5. [database](#database)
    - [db_manager](#databasedb_manager)
-5. [parsers](#parsers)
+6. [parsers](#parsers)
    - [csv_parser](#parserscsv_parser)
-6. [Система сборки](#система-сборки)
-7. [Процесс выполнения программы](#процесс-выполнения-программы)
-   - [CSV $\rightarrow$ SQLite](#csv-to-sqlite)
+7. [Система сборки](#система-сборки)
+
 
 
 
