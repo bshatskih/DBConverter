@@ -3,6 +3,7 @@
 #include "../utils/type_converter.h"
 #include "../utils/file_validator.h"
 #include <ranges>
+#include <algorithm>
 #include <fstream>
 
 namespace parsers {
