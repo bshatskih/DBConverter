@@ -90,6 +90,22 @@ namespace utils {
         if (string_utils::is_boolean(trimmed_str)) {
             return sql_type::Boolean;
         }
+
+
+        std::size_t end = trimmed_str.size();
+        while (end > 0 && std::isalpha(static_cast<unsigned char>(trimmed_str[end - 1]))) {
+            --end;
+        }
+        if (end < trimmed_str.size() && end > 0) {
+            std::string_view stripped(trimmed_str.data(), end);
+            if (string_utils::is_integer(stripped)) {
+                return sql_type::Integer;
+            }
+            if (string_utils::is_real(stripped)) {
+                return sql_type::Real;
+            }
+        }
+
         return sql_type::Text;
     }
 
@@ -147,6 +163,15 @@ namespace utils {
 
         std::string trimmed = string_utils::trim(str);
 
+        // Вспомогательная лямбда — возвращает строку без буквенного суффикса
+        const auto strip_suffix = [&]() -> std::string_view {
+            std::size_t end = trimmed.size();
+            while (end > 0 && std::isalpha(static_cast<unsigned char>(trimmed[end - 1]))) {
+                --end;
+            }
+            return std::string_view(trimmed.data(), end);
+        };
+
         switch (col_type) {
             case sql_type::Null:
                 // Колонка объявлена как Null, но значение не null - fallback to Text
@@ -160,13 +185,20 @@ namespace utils {
                 if (res.ec == std::errc{} && res.ptr == trimmed.data() + trimmed.size()) {
                     return result;
                 }
-                // Не удалось - fallback to nullptr;
+
+                const std::string_view stripped = strip_suffix();
+                if (stripped.size() < trimmed.size() && !stripped.empty()) {
+                    res = std::from_chars(stripped.data(), stripped.data() + stripped.size(), result);
+                    if (res.ec == std::errc{} && res.ptr == stripped.data() + stripped.size()) {
+                        return result;
+                    }
+                }
+
                 return nullptr;
             }
 
             case sql_type::Real: {
                 double result = 0.0;
-
                 std::from_chars_result res = std::from_chars(
                     trimmed.data(), trimmed.data() + trimmed.size(), result);
 
@@ -174,7 +206,14 @@ namespace utils {
                     return result;
                 }
 
-                // Не удалось - fallback to nullptr;
+                const std::string_view stripped = strip_suffix();
+                if (stripped.size() < trimmed.size() && !stripped.empty()) {
+                    res = std::from_chars(stripped.data(), stripped.data() + stripped.size(), result);
+                    if (res.ec == std::errc{} && res.ptr == stripped.data() + stripped.size()) {
+                        return result;
+                    }
+                }
+
                 return nullptr;
             }
 
