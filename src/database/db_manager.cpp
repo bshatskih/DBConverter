@@ -297,4 +297,8 @@ namespace database {
         }
     }
 
+
+    int64_t db_manager::last_insert_rowid() const {
+        return sqlite3_last_insert_rowid(db_);
+    }
 } 

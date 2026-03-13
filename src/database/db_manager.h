@@ -103,6 +103,11 @@ namespace database {
         // Вставляет все строки в одной транзакции.
         // При ошибке делает rollback и пробрасывает исключение.
         void insert_rows(const models::table_schema& schema, const std::vector<models::data_row>& rows);
+    
+        // Возвращает rowid последней вставленной строки.
+        // Используется для получения PK родительской строки при вставке дочерних.
+        [[nodiscard]] int64_t last_insert_rowid() const;
+            
     };
 
 }
