@@ -14,6 +14,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Включаем нашу конфигурацию для SQLite
 include(cmake/FetchSQLite.cmake)
 
+# Включаем нашу конфигурацию для nlohmann/json
+include(cmake/FetchJSON.cmake)
+
 # Добавляем исполняемый файл
 add_executable(${PROJECT_NAME} src/main.cpp src/utils/file_validator.cpp
                                             src/utils/string_utils.cpp
@@ -21,7 +24,8 @@ add_executable(${PROJECT_NAME} src/main.cpp src/utils/file_validator.cpp
                                             src/models/table_schema.cpp
                                             src/models/data_row.cpp
                                             src/database/db_manager.cpp
-                                            src/parsers/csv_parser.cpp)
+                                            src/parsers/csv_parser.cpp
+                                            src/parsers/json_parser.cpp)
 
 # Линковка с SQLite
 target_link_libraries(${PROJECT_NAME}
@@ -31,7 +35,9 @@ target_link_libraries(${PROJECT_NAME}
 # Явно указываем пути к заголовочным файлам
 target_include_directories(${PROJECT_NAME}
     PRIVATE ${SQLITE_INCLUDE_DIR}
+    PRIVATE ${CMAKE_BINARY_DIR}/lib
 )
 
 message(STATUS "Project configured successfully!")
 message(STATUS "SQLite include: ${SQLITE_INCLUDE_DIR}")
+message(STATUS "nlohmann/json path: ${CMAKE_SOURCE_DIR}/libs/nlohmann/json.hpp")
