@@ -1,5 +1,73 @@
 
 # DBConverter
+ 
+Утилита командной строки для конвертации CSV и JSON файлов в SQLite базу данных. Автоматически определяет типы колонок, поддерживает вложенные JSON-структуры с созданием дочерних таблиц.
+ 
+---
+ 
+## Быстрый старт
+ 
+### Требования
+ 
+- CMake 3.14+
+- Компилятор с поддержкой C++20 (GCC 11+, Clang 13+, MSVC 2022+)
+- Python 3 (опционально - для запуска тестов через скрипт)
+ 
+### Сборка
+ 
+```bash
+git clone https://github.com/your/DBConverter.git
+cd DBConverter
+cmake -B build
+cmake --build build
+```
+ 
+Исполняемый файл появится в `build/bin/DBConverter`.
+ 
+### Использование
+ 
+```bash
+# CSV -> SQLite
+./DBConverter data.csv
+ 
+# JSON -> SQLite
+./DBConverter data.json
+ 
+# Указать путь к выходному файлу явно
+./DBConverter data.csv output.db
+./DBConverter data.json output.db
+```
+ 
+Если выходной файл не указан - создаётся рядом с входным с тем же именем и расширением `.db`.
+ 
+### Примеры
+ 
+**CSV:**
+```bash
+./DBConverter examples/sample.csv
+# -> examples/sample.db
+# Таблица "sample" с автоматически определёнными типами колонок
+```
+ 
+**JSON с вложенными структурами:**
+```bash
+./DBConverter examples/sample.json
+# -> examples/sample.db
+# Таблица "sample" + дочерние таблицы для вложенных массивов объектов
+```
+ 
+### Запуск тестов
+ 
+```bash
+cmake --build build
+python scripts/run_tests.py
+```
+ 
+---
+ 
+ 
+ 
+## Содержание
 
 ## Содержание
 
@@ -2079,141 +2147,163 @@ src/
 --- 
 
 
-
 #### Устройство `CMakeLists.txt`
-
-Файл `CMakeLists.txt` - это основной конфигурационный файл для `CMake`, который описывает, как должен быть собран проект. Он состоит из различных команд и инструкций, которые определяют структуру проекта, его зависимости и правила сборки.
-В нашем проекте `CMakeLists.txt` выполняет следующие функции:
-
-1. **Установка минимальной версии CMake**: 
+ 
+Файл `CMakeLists.txt` - это основной конфигурационный файл для `CMake`. В нашем проекте он выполняет следующие функции:
+ 
+1. **Установка минимальной версии CMake и стандарта C++**:
    ```cmake
    cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
-   ```
-   Эта строка указывает, что для сборки проекта требуется CMake версии 3.14 или выше. Если версия CMake на машине разработчика ниже, сборка будет прервана с фатальной ошибкой.
-
-2. **Определение проекта**:
-   ```cmake
    project(DBConverter VERSION 1.0.0 LANGUAGES CXX C)
-   ```
-   Эта команда задает имя проекта (`DBConverter`), его версию (`1.0.0`) и языки программирования, используемые в проекте (`CXX` для C++ и `C` для C).
-
-3. **Установка стандарта C++**:
-   ```cmake
+ 
    set(CMAKE_CXX_STANDARD 20)
    set(CMAKE_CXX_STANDARD_REQUIRED ON)
    ```
-   Эти строки указывают, что проект должен использовать стандарт C++20 и что этот стандарт обязателен.
-
-4. **Добавление исполняемого файла**:
+   Требуется CMake 3.14+ и компилятор с поддержкой C++20.
+ 
+2. **Директории для выходных файлов**:
    ```cmake
-   add_executable(${PROJECT_NAME} src/main.cpp)
+   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+   set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+   set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
    ```
-   Эта команда создает исполняемый файл с именем, совпадающим с именем проекта (`DBConverter`), и указывает, что его исходный код находится в файле `src/main.cpp`.
-
-5. **Линковка с библиотекой SQLite**:
+   Исполняемые файлы и тесты попадают в `build/bin/`, статические библиотеки в `build/lib/`.
+ 
+3. **Подключение зависимостей**:
    ```cmake
-   target_link_libraries(${PROJECT_NAME}
-       PRIVATE SQLite3
+   include(cmake/FetchSQLite.cmake)
+   include(cmake/FetchJSON.cmake)
+   include(cmake/FetchGTest.cmake)
+   ```
+   Каждая зависимость вынесена в отдельный файл в папке `cmake/`. При первой сборке CMake автоматически скачивает их из интернета.
+ 
+4. **Список исходников**:
+   ```cmake
+   set(LIB_SOURCES
+      ${CMAKE_SOURCE_DIR}/src/utils/file_validator.cpp
+      ${CMAKE_SOURCE_DIR}/src/utils/string_utils.cpp
+      ${CMAKE_SOURCE_DIR}/src/utils/type_converter.cpp
+      ${CMAKE_SOURCE_DIR}/src/models/table_schema.cpp
+      ${CMAKE_SOURCE_DIR}/src/models/data_row.cpp
+      ${CMAKE_SOURCE_DIR}/src/database/db_manager.cpp
+      ${CMAKE_SOURCE_DIR}/src/parsers/csv_parser.cpp
+      ${CMAKE_SOURCE_DIR}/src/parsers/json_parser.cpp
    )
    ```
-   Эта команда указывает, что проект должен быть слинкован с библиотекой SQLite. `PRIVATE` означает, что эта зависимость используется только внутри этого проекта и не будет передаваться другим проектам, которые могут зависеть от `DBConverter`.
-
-6. **Указание путей к заголовочным файлам**:
+   Вынесен в отдельную переменную чтобы не дублировать между основным таргетом и тестами. Пути абсолютные через `CMAKE_SOURCE_DIR` - это важно, иначе линковщик не найдёт файлы при сборке тестов.
+ 
+5. **Основной исполняемый файл**:
    ```cmake
+   add_executable(${PROJECT_NAME} src/main.cpp ${LIB_SOURCES})
+ 
+   target_link_libraries(${PROJECT_NAME} PRIVATE SQLite3)
+ 
    target_include_directories(${PROJECT_NAME}
-       PRIVATE ${SQLITE_INCLUDE_DIR}
+      PRIVATE ${SQLITE_INCLUDE_DIR}
+      PRIVATE ${CMAKE_BINARY_DIR}/lib
+      PRIVATE ${CMAKE_SOURCE_DIR}/src
    )
    ```
-   Эта команда указывает пути к заголовочным файлам, которые необходимы для компиляции проекта. `PRIVATE` означает, что эти пути используются только внутри этого проекта и не будут передаваться другим проектам, которые могут зависеть от `DBConverter`.
-
-7. **Вывод статуса конфигурации**:
+   `${CMAKE_BINARY_DIR}/lib` - путь куда скачивается `nlohmann/json.hpp`.
+ 
+6. **Тесты**:
    ```cmake
-   message(STATUS "Project configured successfully!")
-   message(STATUS "SQLite include: ${SQLITE_INCLUDE_DIR}")
+   add_executable(DBConverter_tests
+      tests/test_string_utils.cpp
+      tests/test_type_converter.cpp
+      tests/test_csv_parser.cpp
+      tests/test_json_parser.cpp
+      tests/test_db_manager.cpp
+      tests/test_integration.cpp
+      ${LIB_SOURCES}
+   )
+ 
+   target_link_libraries(DBConverter_tests
+      PRIVATE GTest::gtest_main
+      PRIVATE SQLite3
+   )
+ 
+   target_include_directories(DBConverter_tests
+      PRIVATE ${SQLITE_INCLUDE_DIR}
+      PRIVATE ${CMAKE_BINARY_DIR}/lib
+      PRIVATE ${CMAKE_SOURCE_DIR}/src
+   )
+ 
+   target_compile_definitions(DBConverter_tests
+      PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/test_data"
+   )
+ 
+   include(GoogleTest)
+   gtest_discover_tests(DBConverter_tests)
    ```
-   Эти команды выводят сообщения в консоль во время конфигурации проекта, информируя разработчика о том, что проект был успешно настроен и показывая путь к заголовочным файлам SQLite.
-
-Таким образом, `CMakeLists.txt` является центральным элементом управления сборкой проекта, определяя его структуру, зависимости и правила компиляции. Он обеспечивает автоматизацию процесса сборки и позволяет легко управлять проектом на разных платформах.
-
+   `LIB_SOURCES` компилируется вместе с тестами - тесты имеют доступ ко всем классам проекта. `TEST_DATA_DIR` - абсолютный путь к тестовым данным, передаётся как макрос препроцессора чтобы тесты находили CSV и JSON файлы независимо от рабочей директории при запуске.
+ 
 ---
-
-#### Устройство `cmake/FindSQLite.cmake`
-
-Файл `cmake/FindSQLite.cmake` - это пользовательский модуль для CMake, который предназначен для поиска библиотеки SQLite на системе разработчика. Этот файл содержит инструкции, которые CMake использует для определения местоположения заголовочных файлов и библиотек SQLite, а также для проверки их наличия.
-
-В моём проекте `FindSQLite.cmake` выполняет следующие функции:
-
-1. **Поиск заголовочных файлов**:
-   ```cmake
-   include(FetchContent)
-   ```
-   Эта команда включает модуль `FetchContent`, который позволяет загружать внешние зависимости во время конфигурации проекта. В данном случае, если SQLite не найден на системе, CMake может загрузить его исходный код и собрать его самостоятельно.
-
-2. **Установка политики CMake**:
-   ```cmake
-   if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
-      cmake_policy(SET CMP0135 NEW)
-   endif()
-
-   message(STATUS "Fetching SQLite3...")
-   ```
-   Эта часть кода устанавливает политику CMake для управления поведением при загрузке внешних зависимостей. В данном случае, если версия CMake 3.24.0 или выше, устанавливается новая политика CMP0135, которая может влиять на способ загрузки и использования внешних зависимостей.
-
-3. **Загрузка и сборка SQLite**:
-   ```cmake
-   FetchContent_Declare(
-      sqlite3
-      URL https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
-      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-      SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/sqlite3-src
-   )
-
-   FetchContent_MakeAvailable(sqlite3)
-   ```
-
-   Эта команда объявляет зависимость `sqlite3`, указывая URL для загрузки исходного кода SQLite. `DOWNLOAD_EXTRACT_TIMESTAMP` гарантирует, что файлы будут перезагружены, если они были изменены на сервере. `SOURCE_DIR` указывает, где будет распакован исходный код. `FetchContent_MakeAvailable` загружает и делает доступной эту зависимость для проекта, что позволяет CMake автоматически скомпилировать SQLite и использовать его в проекте.
-
-4. **Создание статической библиотеки**:
-   ```cmake
-   add_library(SQLite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
-   ```
-
-   Эта команда создает статическую библиотеку `SQLite3` из исходного файла `sqlite3.c`, который был загружен и распакован в предыдущем шаге.
-
-5. **Установка определений компиляции**:
-   ```cmake
-   target_compile_definitions(SQLite3 PRIVATE 
-      SQLITE_ENABLE_COLUMN_METADATA
-      SQLITE_ENABLE_DBSTAT_VTAB
-      SQLITE_ENABLE_FTS3
-      SQLITE_ENABLE_FTS4
-      SQLITE_ENABLE_FTS5
-      SQLITE_ENABLE_JSON1
-      SQLITE_ENABLE_RTREE
-      SQLITE_ENABLE_UNLOCK_NOTIFY
-      SQLITE_ENABLE_MATH_FUNCTIONS
-   )
-   ```
-
-   Эта команда устанавливает ряд определений компиляции для библиотеки `SQLite3`, которые включают различные функции и расширения SQLite, такие как поддержка полнотекстового поиска (FTS), JSON, R-деревьев и других возможностей.
-
-6. **Установка директорий включения**:
-
-   ```cmake
-      target_include_directories(SQLite3 PUBLIC ${sqlite3_SOURCE_DIR})
-
-      if(MINGW)
-         target_compile_options(SQLite3 PRIVATE -DSQLITE_OS_WIN=1)
-      endif()
-
-      set(SQLITE_INCLUDE_DIR ${sqlite3_SOURCE_DIR})
-
-      message(STATUS "=== SQLite Setup Complete ===")
-      message(STATUS "SQLite source: ${SQLITE_INCLUDE_DIR}")
-      message(STATUS "SQLite library: SQLite3")
-   ```
-
-   Эта команда указывает, что заголовочные файлы для библиотеки `SQLite3` находятся в директории `${sqlite3_SOURCE_DIR}`. Если используется компилятор MinGW, добавляется определение `SQLITE_OS_WIN=1` для обеспечения совместимости с Windows. Затем устанавливается переменная `SQLITE_INCLUDE_DIR`, которая может быть использована в других частях проекта для указания пути к заголовочным файлам SQLite. Наконец, выводятся сообщения о завершении настройки SQLite и о том, где находятся его исходные файлы и библиотека.
-
-
-
+ 
+#### Устройство `cmake/FetchSQLite.cmake`
+ 
+Скачивает и компилирует SQLite из исходников при первой сборке. Используется SQLite amalgamation - один файл `sqlite3.c` который содержит всю библиотеку целиком.
+ 
+```cmake
+FetchContent_Declare(
+   sqlite3
+   URL https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+   SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/sqlite3-src
+)
+ 
+FetchContent_MakeAvailable(sqlite3)
+add_library(SQLite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
+```
+ 
+Подключённые расширения SQLite:
+ 
+| Расширение | Назначение |
+|------------|------------|
+| `SQLITE_ENABLE_FTS3/4/5` | Полнотекстовый поиск |
+| `SQLITE_ENABLE_JSON1` | Встроенные JSON-функции |
+| `SQLITE_ENABLE_RTREE` | Пространственные индексы |
+| `SQLITE_ENABLE_COLUMN_METADATA` | Метаданные колонок |
+| `SQLITE_ENABLE_MATH_FUNCTIONS` | Математические функции |
+ 
+На Windows/MinGW дополнительно добавляется `-DSQLITE_OS_WIN=1` для совместимости.
+ 
+---
+ 
+#### Устройство `cmake/FetchJSON.cmake`
+ 
+Скачивает единственный заголовочный файл `nlohmann/json.hpp` версии 3.11.3 и кладёт его в `build/lib/nlohmann/`:
+ 
+```cmake
+FetchContent_Declare(
+   nlohmann_json
+   URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
+   DOWNLOAD_NO_EXTRACT TRUE
+   DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/lib/nlohmann
+)
+ 
+FetchContent_MakeAvailable(nlohmann_json)
+```
+ 
+`DOWNLOAD_NO_EXTRACT TRUE` - файл не является архивом, поэтому распаковывать его не нужно. После сборки файл доступен по пути `build/lib/nlohmann/json.hpp`. Подключается в коде как `#include <nlohmann/json.hpp>`.
+ 
+---
+ 
+#### Устройство `cmake/FetchGTest.cmake`
+ 
+Скачивает Google Test версии 1.14.0 и собирает его вместе с проектом:
+ 
+```cmake
+FetchContent_Declare(
+   googletest
+   URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+ 
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+ 
+FetchContent_MakeAvailable(googletest)
+```
+ 
+`INSTALL_GTEST OFF` - отключает глобальную установку Google Test в систему, библиотека используется только внутри проекта. После подключения становятся доступны таргеты `GTest::gtest_main`, `GTest::gmock` и другие.
+ 
