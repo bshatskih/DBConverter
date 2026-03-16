@@ -23,16 +23,22 @@ include(cmake/FetchGTest.cmake)
 # Включаем поддержку тестов в CMake
 enable_testing()
 
+
+# Список исходников
+set(LIB_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/utils/file_validator.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils/string_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils/type_converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/table_schema.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/data_row.cpp
+    ${CMAKE_SOURCE_DIR}/src/database/db_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/parsers/csv_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/parsers/json_parser.cpp
+)
+
+
 # Добавляем исполняемый файл
-add_executable(${PROJECT_NAME} src/main.cpp 
-                               src/utils/file_validator.cpp
-                               src/utils/string_utils.cpp
-                               src/utils/type_converter.cpp 
-                               src/models/table_schema.cpp
-                               src/models/data_row.cpp
-                               src/parsers/csv_parser.cpp
-                               src/parsers/json_parser.cpp
-                               src/database/db_manager.cpp)
+add_executable(${PROJECT_NAME} src/main.cpp ${LIB_SOURCES})
 
 # Линковка с SQLite
 target_link_libraries(${PROJECT_NAME}
@@ -54,18 +60,26 @@ target_include_directories(${PROJECT_NAME}
 add_executable(DBConverter_tests
     tests/test_string_utils.cpp
     tests/test_type_converter.cpp
+    tests/test_csv_parser.cpp
+    tests/test_json_parser.cpp
+    tests/test_db_manager.cpp
+    tests/test_integration.cpp
+    ${LIB_SOURCES}
 )
 
-target_link_libraries(DBConverter_tests
+target_link_libraries(DBConverter_tests 
     PRIVATE GTest::gtest_main
     PRIVATE SQLite3
-    ${LIB_SOURCES}
 )
 
 target_include_directories(DBConverter_tests
     PRIVATE ${SQLITE_INCLUDE_DIR}
     PRIVATE ${CMAKE_BINARY_DIR}/lib
     PRIVATE ${CMAKE_SOURCE_DIR}/src
+)
+
+target_compile_definitions(DBConverter_tests
+    PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/test_data"
 )
 
 include(GoogleTest)
