@@ -43,9 +43,10 @@ namespace parsers {
         // Бросает csv_parse_exception при ошибках формата.
         [[nodiscard]] static csv_parse_result parse(const std::filesystem::path& path);
 
-    private:
         // Разбивает строку CSV на поля с учётом кавычек
         [[nodiscard]] static std::vector<std::string> parse_line(std::string_view line);
+        
+    private:
 
         // Строит table_schema по заголовкам и всем строкам данных
         [[nodiscard]] static models::table_schema build_schema(const std::string& table_name,
