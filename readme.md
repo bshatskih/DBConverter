@@ -64,10 +64,6 @@ python scripts/run_tests.py
 ```
  
 ---
- 
- 
- 
-## Содержание
 
 ## Содержание
 
