@@ -9,7 +9,6 @@
 #include <unordered_map>
 #include <vector>
 
-
 static const std::filesystem::path TEST_DATA = TEST_DATA_DIR;
 
 
@@ -31,7 +30,7 @@ protected:
         std::filesystem::remove(db_path);
     }
 
-    // Читает все строки таблицы — возвращает вектор map<column, value>
+    // Читает все строки таблицы - возвращает вектор map<column, value>
     std::vector<std::unordered_map<std::string, std::string>> read_table(
         const std::string& table_name)
     {
@@ -97,7 +96,7 @@ protected:
 
 
 // ====================================================================== //
-//  1. CSV → SQLite                                                       //
+//  1. CSV -> SQLite                                                       //
 // ====================================================================== //
 
 TEST_F(IntegrationTest, CsvBasicRoundtrip) {
@@ -124,7 +123,7 @@ TEST_F(IntegrationTest, CsvTypesPreserved) {
     db.insert_rows(parsed.schema, parsed.rows);
 
     const auto rows = read_table("basic");
-    // score — REAL, SQLite возвращает как строку
+    // score - REAL, SQLite возвращает как строку
     EXPECT_EQ(rows[0].at("score"), "9.5");
     EXPECT_EQ(rows[1].at("score"), "8.0");
 }
@@ -139,7 +138,6 @@ TEST_F(IntegrationTest, CsvNullValues) {
     const auto rows = read_table("nulls");
     ASSERT_EQ(rows.size(), 3u);
 
-    // Bob — пустые поля → NULL → пустая строка при чтении
     EXPECT_EQ(rows[1].at("email"), "");
     EXPECT_EQ(rows[1].at("age"),   "");
 }
@@ -182,7 +180,7 @@ TEST_F(IntegrationTest, CsvRowCount) {
 
 
 // ====================================================================== //
-//  2. JSON → SQLite                                                      //
+//  2. JSON -> SQLite                                                      //
 // ====================================================================== //
 
 TEST_F(IntegrationTest, JsonBasicRoundtrip) {
@@ -260,10 +258,10 @@ TEST_F(IntegrationTest, JsonNestedArrayTwoTables) {
     EXPECT_TRUE(table_exists("nested_array"));
     EXPECT_TRUE(table_exists("nested_array_orders"));
 
-    // Родительская таблица — 2 строки
+    // Родительская таблица - 2 строки
     EXPECT_EQ(read_table("nested_array").size(), 2u);
 
-    // Дочерняя таблица — 3 строки
+    // Дочерняя таблица - 3 строки
     EXPECT_EQ(read_table("nested_array_orders").size(), 3u);
 }
 
@@ -302,11 +300,11 @@ TEST_F(IntegrationTest, JsonNestedArrayFkCorrect) {
     const auto orders = read_table("nested_array_orders");
     ASSERT_EQ(orders.size(), 3u);
 
-    // Alice (id=1) → первые два заказа должны иметь nested_array_id=1
+    // Alice (id=1) -> первые два заказа должны иметь nested_array_id=1
     EXPECT_EQ(orders[0].at("nested_array_id"), "1");
     EXPECT_EQ(orders[1].at("nested_array_id"), "1");
 
-    // Bob (id=2) → третий заказ должен иметь nested_array_id=2
+    // Bob (id=2) -> третий заказ должен иметь nested_array_id=2
     EXPECT_EQ(orders[2].at("nested_array_id"), "2");
 }
 
