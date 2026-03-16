@@ -217,13 +217,663 @@ src/
 
 
 
+## parsers::json_parser
+
+
+### Назначение
+
+`json_parser` - stateless-класс (все методы статические, конструктор удалён) для парсинга JSON-файлов в структуры готовые к записи в SQLite. В отличие от `csv_parser`, один JSON-файл может породить несколько таблиц - корневую и произвольное количество дочерних для вложенных массивов объектов.
+
+Класс находится в пространстве имён `parsers`.
+
+---
+
+### Расположение
+
+```
+src/
+└── parsers/
+    ├── json_parser.h
+    └── json_parser.cpp
+```
+
+---
 
 
 
+### Типы данных
+ 
+- **`json_parse_exception`**
+   ```cpp
+   class json_parse_exception : public std::runtime_error {
+   public:
+      explicit json_parse_exception(const std::string& message);
+   };
+   ```
+   Бросается при любой ошибке - провале валидации файла, синтаксической ошибке JSON, или неожиданном примитиве на месте ожидаемого объекта.
+ 
+
+ 
+- **`child_entry`**
+   ```cpp
+   struct child_entry {
+      int64_t parent_index;        // индекс родительской строки в её таблице
+      nlohmann::json element;      // сам JSON-объект
+   };
+   ```
+   
+   Внутренняя структура для передачи элементов дочерних массивов между методами. `parent_index` - это позиция родительской строки в её массиве (0, 1, 2...), не реальный `rowid` в базе. Реальный `rowid` подставляется при вставке в `main.cpp`.
+ 
+- **`table_with_rows`**
+   ```cpp
+   struct table_with_rows {
+      models::table_schema schema;
+      std::vector<models::data_row> rows;
+      std::vector<int64_t> parent_indices;
+   };
+   ```
+   
+   Одна таблица с данными. `parent_indices` - вектор индексов родительских строк, по одному на каждую строку. Для корневой таблицы вектор пустой.
+   
+   Пример для трёх пользователей с заказами:
+   
+   ```
+   users.parent_indices = []          // корневая - пустой
+   orders.parent_indices = [0, 0, 1]  // первые два заказа принадлежат users[0],
+                                      // третий — users[1]
+   ```
+ 
+- **`json_parse_result`**
+   
+   ```cpp
+   struct json_parse_result {
+      std::vector<table_with_rows> tables;
+   };
+   ```
+   
+   Результат парсинга - все таблицы в порядке родитель $\Rightarrow$ дочерние. Этот порядок критичен для вставки в SQLite: родительская таблица должна существовать до вставки дочерних строк с FK.
+   
+---
+ 
+
+### Интерфейс
+
+- **`parse`** - основной публичный метод класса. Читает JSON-файл по указанному пути, валидирует его, парсит рекурсивно, строит схемы и строки для всех таблиц, и возвращает `json_parse_result`. Бросает `json_parse_exception` при любой ошибке.
+   
+   ```cpp
+   [[nodiscard]] static json_parse_result parse(const std::filesystem::path& path);
+   ```
+   
+   **Гарантии:**
+   - Корень массив $\rightarrow$ каждый элемент это строка корневой таблицы
+      ```json
+      [
+         { "id": 1, "name": "Alice" },
+         { "id": 2, "name": "Bob"   }
+      ]
+      ```
+   - Корень объект $\rightarrow$ оборачивается в массив из одного элемента
+      ```json
+      {
+         "id": 1,
+         "name": "Alice",
+         "orders": [...]
+      }
+      ```
+   - Корень примитив $\rightarrow$ `json_parse_exception`
+      ```json
+      "hello" / 42 / true / null
+      ```
+   - Имя таблицы берётся из имени файла через `to_sql_identifier`
+   - Имена колонок нормализуются через `to_sql_identifier`
+   - Таблицы в результате упорядочены: родитель раньше дочерних
+   
+   **Бросает `json_parse_exception` если:**
+   - Файл не прошёл валидацию (`file_validator`)
+   - Файл содержит невалидный JSON
+   - Корень JSON — примитив (`"hello"`, `42`, `true`)
+   - Элемент массива не является объектом
+   
+   ```cpp
+   try {
+      auto result = parsers::json_parser::parse("data.json");
+      for (const auto& table : result.tables) {
+         std::cout << table.schema.name() << ": "
+                     << table.rows.size() << " rows\n";
+      }
+   } catch (const parsers::json_parse_exception& e) {
+      std::cerr << e.what() << "\n";
+   }
+   ```
+ 
+---
 
 
 
+### Внутренние методы
+ 
+- **`process_array`** 
+   ```cpp
+   static void process_array(
+      const std::string& table_name,
+      const std::string& parent_table,
+      const std::vector<child_entry>& entries,
+      std::vector<table_with_rows>& result);
+   ```
+   
+   Обрабатывает массив объектов - строит одну таблицу и рекурсивно запускает себя для всех вложенных массивов объектов. Принимает уже собранные `child_entry` - элементы с их `parent_index`.
+   
+   Порядок работы:
+      1. Для каждого элемента вызывает `process_object` $\rightarrow$ получает `data_row` и накапливает дочерние массивы в `child_arrays`
+      2. По всем собранным строкам определяет типы колонок через `infer_columns`
+      3. Ищет колонку `id` - если есть, делает её PK
+      4. Нормализует булевые значения в `"1"`/`"0"`
+      5. Строит `table_schema` и добавляет таблицу в `result`
+      6. Для каждого накопленного дочернего массива рекурсивно вызывает `process_array`
+   
 
+ 
+- **`process_object`** -  обрабатывает один JSON-объект и принимает решение что делать с каждым полем.
+   
+   ```cpp
+   static models::data_row process_object(
+      const std::string& table_name,
+      const nlohmann::json& object,
+      std::vector<std::string>& headers,
+      int64_t row_index,
+      std::unordered_map<std::string, std::vector<child_entry>>& child_arrays);
+   ```
+   
+   Маппинг типов JSON, поведение:
+   
+   | Тип JSON | Поведение |
+   |----------|-----------|
+   | `null` | `set_null` $\rightarrow$ `NULL` в базе |
+   | `bool` | `"1"` или `"0"` |
+   | `integer` | `std::to_string` |
+   | `float` | `snprintf("%.15g")` |
+   | `string` | как есть |
+   | `object` | `flatten_object` - разворачивается в плоские поля с префиксом |
+   | `array` пустой | пропускается |
+   | `array` объектов | накапливается в `child_arrays[field_name]` с текущим `row_index` |
+   | `array` примитивов | сериализуется в строку через запятую |
+   
+
+- **`flatten_object`**
+   
+   ```cpp
+   static void flatten_object(
+      const std::string& prefix,
+      const nlohmann::json& object,
+      models::data_row& row,
+      std::vector<std::string>& headers);
+   ```
+   
+   Рекурсивно разворачивает вложенный объект в плоские колонки. Имя колонки строится как `prefix_key`. Поддерживает произвольную глубину вложенности объектов. Разворачивание в плоские колонки - когда встречаем вложенный объект, мы не создаём дочернюю таблицу, а просто добавляем его поля в текущую строку с префиксом:
+   ```json
+   {
+   "id": 1,
+   "address": {
+      "city": "Moscow",
+      "zip":  "101000"
+      }
+   }
+   ```
+
+   `flatten_object` вызывается с `prefix = "address"` и разворачивает объект в:
+   ```json
+   "address" + "_" + "city" -> колонка "address_city" = "Moscow"
+   "address" + "_" + "zip"  -> колонка "address_zip"  = "101000"
+   ```
+
+   Произвольная глубина - если внутри объекта снова объект, рекурсия продолжается:
+   
+   Массивы объектов внутри `flatten_object` пропускаются - они должны обрабатываться через `process_object` как дочерние таблицы, а не как плоские поля.
+   Пример:
+   ```json
+   {
+      "id": 1,
+      "meta": {
+         "tags": [
+            { "name": "vip" },
+            { "name": "active" }
+         ]
+      }
+   }
+   ```
+   Когда `flatten_object` доходит до `"tags"` - это массив объектов внутри вложенного объекта `meta`. Создать дочернюю таблицу здесь нельзя - `flatten_object` не имеет доступа к `child_arrays`, он только пишет в `data_row`. Поэтому `tags` просто пропускается.
+
+ 
+- **`infer_columns`** - определяет типы колонок по всем строкам. Логика та же что в `csv_parser::build_schema` - двухпроходная обработка через `type_converter::infer_column_type`.
+   ```cpp
+   [[nodiscard]] static std::vector<models::Column> infer_columns(
+      const std::vector<std::string>& headers,
+      const std::vector<models::data_row>& rows);
+   ```
+ 
+- **`serialize_primitive_array`** - сериализует массив примитивов в строку через запятую. Например, массив `[1, "two", true]` будет сериализован в строку `"1,two,1"`. Используется для массивов примитивов внутри `process_object` - такие массивы не порождают дочернюю таблицу, а просто сохраняются в виде строки.
+ 
+   ```cpp
+   [[nodiscard]] static std::string serialize_primitive_array(const nlohmann::json& array);
+   ```
+   
+
+- **`ensure_header`**
+   ```cpp
+   static void ensure_header(
+      std::vector<std::string>& headers,
+      const std::string& col_name);
+   ```
+   
+   Добавляет имя колонки в список если его ещё нет. Используется для накопления уникального набора заголовков при обходе объектов с разными наборами полей.
+
+---
+
+### Поддерживаемые форматы JSON
+
+
+#### Формат 1 - Массив плоских объектов
+ 
+Простейший случай. Каждый объект в массиве становится строкой одной таблицы.
+ 
+```json
+[
+  { "id": 1, "name": "Alice", "age": 30 },
+  { "id": 2, "name": "Bob",   "age": 25 }
+]
+```
+ 
+Результат - одна таблица `users`:
+ 
+```sql
+CREATE TABLE "users" (
+  "id"   INTEGER PRIMARY KEY,
+  "name" TEXT,
+  "age"  INTEGER
+);
+```
+ 
+#### Формат 2 - Массив объектов с вложенными массивами объектов
+ 
+Вложенный массив объектов становится дочерней таблицей. FK проставляется автоматически.
+ 
+```json
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "orders": [
+      { "id": 101, "amount": 50.0, "item": "book" },
+      { "id": 102, "amount": 75.0, "item": "pen"  }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "Bob",
+    "orders": [
+      { "id": 201, "amount": 30.0, "item": "notebook" }
+    ]
+  }
+]
+```
+ 
+Результат - две таблицы:
+ 
+```sql
+CREATE TABLE "users" (
+  "id"   INTEGER PRIMARY KEY,
+  "name" TEXT
+);
+ 
+CREATE TABLE "users_orders" (
+  "id"      INTEGER PRIMARY KEY AUTOINCREMENT,
+  "users_id" INTEGER NOT NULL REFERENCES "users",
+  "id"      INTEGER,
+  "amount"  REAL,
+  "item"    TEXT
+);
+```
+ 
+Данные в `users_orders`:
+ 
+| users_id | id  | amount | item     |
+|----------|-----|--------|----------|
+| 1        | 101 | 50.0   | book     |
+| 1        | 102 | 75.0   | pen      |
+| 2        | 201 | 30.0   | notebook |
+
+ 
+#### Формат 3 - Рекурсивная вложенность
+ 
+Вложенность на любую глубину - каждый уровень массива объектов порождает свою таблицу. Имена таблиц строятся как цепочка `parent_child_grandchild`.
+ 
+```json
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "orders": [
+      {
+        "id": 101,
+        "amount": 50.0,
+        "items": [
+          { "product": "book",   "qty": 2 },
+          { "product": "pencil", "qty": 5 }
+        ]
+      }
+    ]
+  }
+]
+```
+ 
+Результат - три таблицы:
+ 
+```sql
+CREATE TABLE "users" ( ... );
+ 
+CREATE TABLE "users_orders" (
+  "id"       INTEGER PRIMARY KEY AUTOINCREMENT,
+  "users_id" INTEGER NOT NULL REFERENCES "users",
+  ...
+);
+ 
+CREATE TABLE "users_orders_items" (
+  "id"             INTEGER PRIMARY KEY AUTOINCREMENT,
+  "users_orders_id" INTEGER NOT NULL REFERENCES "users_orders",
+  "product"        TEXT,
+  "qty"            INTEGER
+);
+```
+ 
+
+ 
+#### Формат 4 - Вложенный объект (не массив)
+ 
+Вложенный объект разворачивается в плоские колонки с префиксом. Дочерней таблицы не создаётся.
+ 
+```json
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "address": {
+      "city":    "Moscow",
+      "zip":     "101000",
+      "country": "Russia"
+    }
+  }
+]
+```
+ 
+Результат - одна таблица с плоской структурой:
+ 
+```sql
+CREATE TABLE "users" (
+  "id"              INTEGER PRIMARY KEY,
+  "name"            TEXT,
+  "address_city"    TEXT,
+  "address_zip"     TEXT,
+  "address_country" TEXT
+);
+```
+ 
+#### Формат 5 - Глубоко вложенные объекты
+ 
+Flatten работает рекурсивно - объект внутри объекта тоже разворачивается.
+ 
+```json
+[
+  {
+    "id": 1,
+    "location": {
+      "city": "Moscow",
+      "coords": {
+        "lat": 55.75,
+        "lon": 37.61
+      }
+    }
+  }
+]
+```
+ 
+Результат:
+ 
+```sql
+CREATE TABLE "data" (
+  "id"                   INTEGER PRIMARY KEY,
+  "location_city"        TEXT,
+  "location_coords_lat"  REAL,
+  "location_coords_lon"  REAL
+);
+```
+ 
+ 
+#### Формат 6 - Массив примитивов внутри объекта
+ 
+Массив примитивов сериализуется в строку через запятую и хранится как TEXT.
+ 
+```json
+[
+  {
+    "id":   1,
+    "name": "Bulbasaur",
+    "types": ["Grass", "Poison"],
+    "moves": ["tackle", "growl", "vine-whip"]
+  }
+]
+```
+ 
+Результат:
+ 
+```sql
+CREATE TABLE "pokemon" (
+  "id"    INTEGER PRIMARY KEY,
+  "name"  TEXT,
+  "types" TEXT,   -- "Grass,Poison"
+  "moves" TEXT    -- "tackle,growl,vine-whip"
+);
+```
+ 
+ 
+#### Формат 7 - Одиночный объект (не массив)
+ 
+Корневой объект оборачивается в массив из одного элемента.
+ 
+```json
+{
+  "id":   1,
+  "name": "Alice",
+  "age":  30
+}
+```
+ 
+Результат - таблица из одной строки:
+ 
+```sql
+CREATE TABLE "data" (
+  "id"   INTEGER PRIMARY KEY,
+  "name" TEXT,
+  "age"  INTEGER
+);
+```
+ 
+ 
+#### Формат 8 - Объекты с разными наборами полей
+ 
+Объекты в массиве не обязаны иметь одинаковые поля. Отсутствующие поля вставляются как `NULL`.
+ 
+```json
+[
+  { "id": 1, "name": "Alice", "email": "alice@example.com" },
+  { "id": 2, "name": "Bob" },
+  { "id": 3, "name": "Charlie", "phone": "+7 999 000 00 00" }
+]
+```
+ 
+Результат:
+ 
+```sql
+CREATE TABLE "users" (
+  "id"    INTEGER PRIMARY KEY,
+  "name"  TEXT,
+  "email" TEXT,   -- NULL для Bob и Charlie
+  "phone" TEXT    -- NULL для Alice и Bob
+);
+```
+ 
+
+ 
+### Формат 9 - Комбинированный
+ 
+Все возможности вместе: вложенные объекты (flatten), вложенные массивы объектов (дочерние таблицы), массивы примитивов (сериализация).
+ 
+```json
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "address": { "city": "Moscow", "zip": "101000" },
+    "tags": ["vip", "active"],
+    "orders": [
+      {
+        "id": 101,
+        "amount": 150.0,
+        "items": [
+          { "product": "book", "qty": 2 }
+        ]
+      }
+    ]
+  }
+]
+```
+ 
+Результат - три таблицы:
+ 
+```sql
+-- Таблица 1: корневая
+CREATE TABLE "users" (
+  "id"           INTEGER PRIMARY KEY,
+  "name"         TEXT,
+  "address_city" TEXT,     -- flatten объекта address
+  "address_zip"  TEXT,     -- flatten объекта address
+  "tags"         TEXT      -- "vip,active" — массив примитивов
+);
+ 
+-- Таблица 2: дочерняя
+CREATE TABLE "users_orders" (
+  "id"       INTEGER PRIMARY KEY AUTOINCREMENT,
+  "users_id" INTEGER NOT NULL REFERENCES "users",
+  "id"       INTEGER,
+  "amount"   REAL
+);
+ 
+-- Таблица 3: дочерняя второго уровня
+CREATE TABLE "users_orders_items" (
+  "id"              INTEGER PRIMARY KEY AUTOINCREMENT,
+  "users_orders_id" INTEGER NOT NULL REFERENCES "users_orders",
+  "product"         TEXT,
+  "qty"             INTEGER
+);
+```
+ 
+
+---
+ 
+### Неподдерживаемые форматы
+ 
+### Корень — примитив
+ 
+```json
+"hello"
+```
+```json
+42
+```
+ 
+Бросается `json_parse_exception`. JSON должен быть объектом или массивом.
+ 
+---
+ 
+#### Корень - объект объектов (словарь сущностей)
+ 
+```json
+{
+  "bulbasaur":  { "hp": 45, "attack": 49 },
+  "charmander": { "hp": 39, "attack": 52 }
+}
+```
+ 
+Парсер обработает это как **один объект** с полями `bulbasaur_hp`, `bulbasaur_attack`, `charmander_hp`... - то есть одна строка с тысячами колонок. Это не ошибка парсера, но результат почти наверняка не тот что ожидается.
+ 
+Нужно предварительно конвертировать в массив:
+ 
+```python
+import json
+ 
+with open("input.json") as f:
+    data = json.load(f)
+ 
+result = [{"name": k, **v} for k, v in data.items()]
+ 
+with open("output.json", "w") as f:
+    json.dump(result, f)
+```
+ 
+После конвертации:
+ 
+```json
+[
+  { "name": "bulbasaur",  "hp": 45, "attack": 49 },
+  { "name": "charmander", "hp": 39, "attack": 52 }
+]
+```
+ 
+ 
+#### Массив смешанных типов
+ 
+```json
+[
+  { "id": 1, "name": "Alice" },
+  "some string",
+  42
+]
+```
+ 
+Бросается `json_parse_exception` - все элементы корневого массива должны быть объектами.
+ 
+ 
+#### Массив объектов внутри flatten
+ 
+```json
+[
+  {
+    "id": 1,
+    "meta": {
+      "tags": [
+        { "name": "vip" },
+        { "name": "active" }
+      ]
+    }
+  }
+]
+```
+ 
+Массив объектов внутри вложенного объекта (`meta.tags`) **пропускается** - `flatten_object` не создаёт дочерних таблиц. Чтобы `tags` стал дочерней таблицей, он должен находиться на верхнем уровне объекта, а не внутри вложенного объекта:
+ 
+```json
+[
+  {
+    "id": 1,
+    "meta_description": "some text",
+    "tags": [
+      { "name": "vip" },
+      { "name": "active" }
+    ]
+  }
+]
+```
+
+---
 
 
 
