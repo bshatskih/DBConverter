@@ -1,0 +1,4 @@
+id,name,active,verified
+1,Alice,true,yes
+2,Bob,false,no
+3,Charlie,true,on

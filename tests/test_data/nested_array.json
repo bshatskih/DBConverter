@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "orders": [
+      { "id": 101, "amount": 50.0 },
+      { "id": 102, "amount": 75.0 }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "Bob",
+    "orders": [
+      { "id": 201, "amount": 30.0 }
+    ]
+  }
+]

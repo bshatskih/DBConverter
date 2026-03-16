@@ -1,0 +1,4 @@
+[
+  { "id": 1, "name": "Bulbasaur", "types": ["Grass", "Poison"] },
+  { "id": 2, "name": "Charmander", "types": ["Fire"] }
+]
